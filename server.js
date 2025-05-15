@@ -1,11 +1,5 @@
-// server.js
 /* ------------------------------------------------------------------
-   Resto Supply Hub • GPT Chatbot Backend
-   • Loads storeInfo.json (hours, promos, etc.)
-   • Fetches full Shopify catalog at boot & every 6 h
-   • Builds masked product lines: “• Title – $Price – [View item →](url)”
-   • Accepts full chat history from browser, prepends system + catalog
-   • Calls OpenRouter.ai with LLaMA-3.3-70B and returns AI reply
+   Resto Supply Hub • GPT Chatbot Backend (HTML output)
 ------------------------------------------------------------------ */
 import express from "express";
 import fetch from "node-fetch";
@@ -19,7 +13,7 @@ const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_DOMAIN; // e.g. restosupplyhub.myshopify.com
 
 // ─── CACHES ───────────────────────────────────────────────────────
-let catalogLines = [];  // Array<string> of Markdown bullets
+let catalogLines = [];  // Markdown lines; we'll wrap in HTML later
 let storeInfo = {};  // Loaded from storeInfo.json
 
 // ─── LOAD STATIC STORE INFO ──────────────────────────────────────
@@ -51,10 +45,8 @@ async function fetchCatalog() {
           edges {
             cursor
             node {
-              title handle tags
-              variants(first:1) {
-                edges { node { price { amount currencyCode } } }
-              }
+              title handle
+              variants(first:1) { edges { node { price { amount currencyCode } } } }
             }
           }
           pageInfo { hasNextPage }
@@ -77,6 +69,7 @@ async function fetchCatalog() {
             const v0 = node.variants.edges[0]?.node;
             const price = v0 ? `${v0.price.amount} ${v0.price.currencyCode}` : "—";
             const url = `https://${SHOPIFY_DOMAIN}/products/${node.handle}`;
+            // keep Markdown link; we'll convert in frontend to HTML <a>
             out.push(`• ${node.title} – $${price} – [View item →](${url})`);
         });
 
@@ -121,23 +114,30 @@ app.post("/chat", async (req, res) => {
             return res.status(500).json({ error: "Missing OpenRouter API key" });
         }
 
-        // Build system prompt
+        // Build a system prompt that instructs HTML output
         const system = {
             role: "system",
             content: `
 You are a helpful assistant for Resto Supply Hub.
 
-We currently stock **${catalogLines.length} products** in our online catalog.
+We currently stock **${catalogLines.length} products**.
 
 ===== Store Info =====
 ${storeInfoSnippet()}
 
 ===== Full Catalog =====
-(The assistant may reference any line below verbatim; do not reveal raw URLs)
+Below is the complete catalog as Markdown with links.
+**Your job**: When the user asks to list products or global info:
+  1. Convert the Markdown list into an HTML ordered list (<ol><li> … </li></ol>).
+  2. Keep the link text exactly as “View item →” and render as an <a> tag.
+  3. Surround this HTML snippet with no additional wrapper—return only the HTML.
+  4. For non-catalog answers, return plain HTML paragraphs (<p>…</p>).
+
+**Do NOT** output any raw Markdown or plain text for product lists.  Always output valid HTML.
 `.trim()
         };
 
-        // Catalog message with masked links
+        // Send the raw catalog markdown in its own message role
         const catalogMsg = {
             role: "assistant",
             name: "catalog",
@@ -145,7 +145,7 @@ ${storeInfoSnippet()}
         };
 
         // Call the model
-        const apiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        const ai = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
                 Authorization: `Bearer ${OPENROUTER_API_KEY}`,
@@ -157,10 +157,10 @@ ${storeInfoSnippet()}
             })
         });
 
-        const apiJson = await apiRes.json();
-        const reply = apiJson?.choices?.[0]?.message?.content
-            || "Sorry, I couldn't generate a response right now.";
+        const j = await ai.json();
+        const reply = j?.choices?.[0]?.message?.content || "<p>Sorry, no answer.</p>";
         res.json({ reply });
+
     } catch (err) {
         console.error("🔥 /chat error:", err);
         res.status(500).json({ error: "Server error" });
