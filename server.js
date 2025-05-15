@@ -1,13 +1,3 @@
-import express from "express";
-import fetch from "node-fetch";
-import cors from "cors";
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(cors());
-app.use(express.json());
-
 app.post("/chat", async (req, res) => {
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
     const { message } = req.body;
@@ -20,7 +10,7 @@ app.post("/chat", async (req, res) => {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                model: "gpt-4",
+                model: "gpt-4", // Optionally test with "gpt-3.5-turbo" too
                 messages: [
                     { role: "system", content: "You are a helpful assistant for Resto Supply Hub customers." },
                     { role: "user", content: message },
@@ -29,11 +19,12 @@ app.post("/chat", async (req, res) => {
         });
 
         const data = await response.json();
-        res.status(200).json({ reply: data.choices?.[0]?.message?.content || "No response from GPT." });
+        console.log("🔎 OpenAI raw response:", JSON.stringify(data, null, 2)); // ADD THIS
+        const reply = data?.choices?.[0]?.message?.content;
+
+        res.status(200).json({ reply: reply || "⚠️ OpenAI returned no message." });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Server error." });
+        console.error("🔥 OpenAI error:", err);
+        res.status(500).json({ error: "OpenAI request failed.", details: err.message });
     }
 });
-
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
