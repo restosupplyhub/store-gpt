@@ -1,22 +1,27 @@
+// server.js
 /* ------------------------------------------------------------------
-   Resto Supply Hub • GPT Chatbot Backend (HTML output)
+   Resto Supply Hub • GPT Chatbot Backend
+   • Loads storeInfo.json (hours, promos, etc.)
+   • Fetches full Shopify catalog at boot & every 6 h
+   • Sends store-info + catalog + general-chat system prompt
+   • Accepts full chat history; returns HTML reply
 ------------------------------------------------------------------ */
 import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
 import fs from "fs";
 
-// ─── ENVIRONMENT ─────────────────────────────────────────────────
+/* ENV */
 const PORT = process.env.PORT || 3000;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_DOMAIN; // e.g. restosupplyhub.myshopify.com
 
-// ─── CACHES ───────────────────────────────────────────────────────
-let catalogLines = [];  // Markdown lines; we'll wrap in HTML later
-let storeInfo = {};  // Loaded from storeInfo.json
+/* CACHES */
+let catalogLines = [];  // Markdown bullets with masked links
+let storeInfo = {};  // from storeInfo.json
 
-// ─── LOAD STATIC STORE INFO ──────────────────────────────────────
+/* Load static store info */
 function loadStoreInfo() {
     try {
         storeInfo = JSON.parse(fs.readFileSync("./storeInfo.json", "utf8"));
@@ -27,13 +32,13 @@ function loadStoreInfo() {
     }
 }
 
-// ─── FETCH FULL SHOPIFY CATALOG ──────────────────────────────────
+/* Fetch full Shopify catalog (runs at boot + every 6 h) */
 async function fetchCatalog() {
     if (!SHOPIFY_TOKEN || !SHOPIFY_DOMAIN) {
-        console.warn("Shopify env vars missing; skipping catalog fetch.");
+        console.warn("Shopify env vars missing; catalog fetch skipped.");
         return;
     }
-    console.log("⏳ Fetching full Shopify catalog…");
+    console.log("⏳ Fetching full catalog…");
     const out = [];
     const PAGE = 250;
     let cursor = null;
@@ -46,7 +51,9 @@ async function fetchCatalog() {
             cursor
             node {
               title handle
-              variants(first:1) { edges { node { price { amount currencyCode } } } }
+              variants(first:1) {
+                edges { node { price { amount currencyCode } } }
+              }
             }
           }
           pageInfo { hasNextPage }
@@ -69,7 +76,6 @@ async function fetchCatalog() {
             const v0 = node.variants.edges[0]?.node;
             const price = v0 ? `${v0.price.amount} ${v0.price.currencyCode}` : "—";
             const url = `https://${SHOPIFY_DOMAIN}/products/${node.handle}`;
-            // keep Markdown link; we'll convert in frontend to HTML <a>
             out.push(`• ${node.title} – $${price} – [View item →](${url})`);
         });
 
@@ -81,7 +87,7 @@ async function fetchCatalog() {
     console.log(`✅ Catalog loaded (${catalogLines.length} items).`);
 }
 
-// ─── BUILD STORE INFO SNIPPET ───────────────────────────────────
+/* Build store-info snippet */
 function storeInfoSnippet() {
     return `
 Office hours: ${storeInfo.office_hours || "—"}
@@ -89,70 +95,61 @@ Contact: ${storeInfo.phone || ""} • ${storeInfo.email || ""}
 Current offer: ${storeInfo.promo || "—"}
 Returns: ${storeInfo.returns || "—"}
 Shipping: ${storeInfo.shipping || "—"}
-Tracking FAQ: ${storeInfo.tracking || "—"}
+Tracking: ${storeInfo.tracking || "—"}
 `.trim();
 }
 
-// ─── INITIALIZATION ─────────────────────────────────────────────
+/* Boot tasks */
 loadStoreInfo();
 fetchCatalog().catch(console.error);
-setInterval(fetchCatalog, 6 * 60 * 60 * 1000); // refresh every 6 hours
+setInterval(fetchCatalog, 6 * 60 * 60 * 1000);
 
-// ─── EXPRESS APP ────────────────────────────────────────────────
+/* Express setup */
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── CHAT ENDPOINT ──────────────────────────────────────────────
+/* Chat endpoint */
 app.post("/chat", async (req, res) => {
     try {
         const history = req.body.messages;
-        if (!Array.isArray(history) || history.length === 0) {
+        if (!Array.isArray(history) || !history.length)
             return res.status(400).json({ error: "messages array required" });
-        }
-        if (!OPENROUTER_API_KEY) {
+        if (!OPENROUTER_API_KEY)
             return res.status(500).json({ error: "Missing OpenRouter API key" });
-        }
 
-        // Build a system prompt that instructs HTML output
         const system = {
             role: "system",
             content: `
-You are a friendly, helpful AI assistant for Resto Supply Hub (https://www.restosupplyhub.com).
+You are a friendly AI assistant for Resto Supply Hub.
 
-We stock ${catalogLines.length} packaging products.
+We stock **${catalogLines.length} products**.
 
 ===== Store Info =====
 ${storeInfoSnippet()}
 
 ===== Catalog =====
-Below is our full catalog in Markdown with masked links.
-You may reference any line verbatim; do NOT expose raw URLs.
+Below is the full catalog (Markdown). Reference any line verbatim; do NOT expose raw URLs.
 ${catalogLines.join("\n")}
 
 ===== Conversational Guidelines =====
-1. If the user greets you (“hi”, “hello”), reply with a friendly greeting in HTML, e.g. <p>Hello! How can I assist you today?</p>.
-2. If they ask about products, only reference the catalog bullets above rendered as an HTML list.
-3. If they ask about hours, tracking, returns, or promos, use the Store Info section.
-4. For any other general questions (“why”, “what”, “how”), answer conversationally in HTML paragraphs (<p>…</p>).
-5. Always return valid HTML: <p> for text, <ol><li>…</li></ol> for lists, <a> for links.
-
+1. For greetings (“hi”, “hello”), reply with a friendly HTML paragraph (<p>…</p>).
+2. For product requests, convert the Markdown bullets into an HTML ordered list (<ol><li>…</li></ol>).
+3. For store info (hours, tracking, returns, promos), use the store-info above, wrapped in <p>…</p>.
+4. Always output valid HTML: <p>, <ol>, <li>, <a>.
 `.trim()
         };
 
-
-        // Send the raw catalog markdown in its own message role
         const catalogMsg = {
             role: "assistant",
             name: "catalog",
             content: catalogLines.join("\n")
         };
 
-        // Call the model
-        const ai = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        const apiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
             headers: {
-                Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+                "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
                 "Content-Type": "application/json"
             },
             body: JSON.stringify({
@@ -161,17 +158,15 @@ ${catalogLines.join("\n")}
             })
         });
 
-        const j = await ai.json();
-        const reply = j?.choices?.[0]?.message?.content || "<p>Sorry, no answer.</p>";
+        const apiJson = await apiRes.json();
+        const reply = apiJson?.choices?.[0]?.message?.content
+            || "<p>Sorry, I couldn’t generate a response right now.</p>";
         res.json({ reply });
-
-    } catch (err) {
-        console.error("🔥 /chat error:", err);
+    } catch (e) {
+        console.error(e);
         res.status(500).json({ error: "Server error" });
     }
 });
 
-// ─── START SERVER ───────────────────────────────────────────────
-app.listen(PORT, () => {
-    console.log(`🚀 Chatbot API listening on port ${PORT}`);
-});
+/* Start */
+app.listen(PORT, () => console.log(`🚀 Chatbot API on port ${PORT}`));
