@@ -1,9 +1,9 @@
 {
     "office_hours": "Mon–Fri 9 a.m. – 5 p.m. EST",
-    "phone": "+1 (416) 555-1234",
+    "phone": "",
     "email": "support@restosupplyhub.com",
-    "tracking": "We email tracking numbers when an order is fulfilled. For self-service visit /pages/track.",
-    "promo": "May 2025: 10 % off Kraft Fold Boxes with code **KRAFT10** (expires 31-May).",
-    "returns": "Unopened packaging may be returned within 30 days. Contact us for an RMA.",
-    "shipping": "Free Canadian shipping on orders over CAD $250."
+    "tracking": "https://www.restosupplyhub.com/apps/track123",
+    "promo": "",
+    "returns": "",
+    "shipping": ""
 }
