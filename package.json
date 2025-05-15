@@ -1,10 +1,10 @@
 {
-    "name": "openai-chat-proxy",
+    "name": "resto-chatbot",
     "version": "1.0.0",
-    "main": "server.js",
     "type": "module",
     "scripts": {
-        "start": "node server.js"
+        "start": "node server.js",
+        "refresh-catalog": "node scripts/fetchCatalog.js"
     },
     "dependencies": {
         "cors": "^2.8.5",
