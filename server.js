@@ -139,18 +139,24 @@ app.post("/chat", async (req, res) => {
         const system = {
             role: "system",
             content: `
-You are a helpful agent for Resto Supply Hub.
-
-===== Store Info =====
-${storeInfoSnippet()}
-
-===== Matching Products =====
-${products || "— no relevant products —"}
-
-If you mention a product, reference it with the phrase **“View item →”** (already included).
-Do not reveal raw URLs.
-`.trim()
+          You are a helpful agent for Resto Supply Hub.
+          
+          ===== Store Info =====
+          ${storeInfoSnippet()}
+          
+          ===== Matching Products =====
+          ${products || "— no relevant products —"}
+          
+          IMPORTANT:
+          • Every product line already contains a Markdown link in the format [View item →](URL).
+          • **Do not alter or re-format that link**.  Repeat the line verbatim or quote it.
+          • Never reveal raw URLs to the user.
+          
+          If the customer needs a product, copy the bullet exactly.  
+          For policies (hours, tracking, promo) reply normally.
+          `.trim()
         };
+
 
         const ai = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
