@@ -142,8 +142,6 @@ ${storeInfoSnippet()}
         const MODELS = [
             "deepseek/deepseek-prover-v2:free",
             "meta-llama/llama-3.3-70b-instruct:free",
-            "meta-llama/llama-3-8b-instruct:free",
-            "mistral/mistral-7b-instruct:free",
             "nousresearch/deephermes-3-mistral-24b-preview:free",
             "opengvlab/internvl3-14b:free",
 
