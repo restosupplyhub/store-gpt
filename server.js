@@ -1,23 +1,23 @@
 // server.js
 /* ------------------------------------------------------------------
-   Resto Supply Hub • GPT Chatbot Backend   (with model fallbacks)
+   Resto Supply Hub • GPT Chatbot Backend (DeepSeek only + full HTML list)
 ------------------------------------------------------------------ */
 import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
 import fs from "fs";
 
-/* ── ENV ───────────────────────────────────────────────────────── */
+/* ─── ENV ─────────────────────────────────────────────────────── */
 const PORT = process.env.PORT || 3000;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_STOREFRONT_TOKEN;
 const SHOPIFY_DOMAIN = process.env.SHOPIFY_DOMAIN; // e.g. restosupplyhub.myshopify.com
 
-/* ── CACHES ────────────────────────────────────────────────────── */
-let catalogLines = [];  // Markdown bullets (masked links)
-let storeInfo = {};  // office hours, promos, etc.
+/* ─── CACHES ─────────────────────────────────────────────────── */
+let catalogHtml = "";  // "<ol>…</ol>"
+let storeInfo = {};  // loaded from storeInfo.json
 
-/* ── Load static store info ───────────────────────────────────── */
+/* ─── Load storeInfo.json once ───────────────────────────────── */
 function loadStoreInfo() {
     try {
         storeInfo = JSON.parse(fs.readFileSync("./storeInfo.json", "utf8"));
@@ -28,172 +28,152 @@ function loadStoreInfo() {
     }
 }
 
-/* ── Fetch full Shopify catalog (runs at boot + every 6 h) ────── */
-async function fetchCatalog() {
+/* ─── Fetch full catalog & build HTML list ───────────────────── */
+async function buildCatalogHtml() {
     if (!SHOPIFY_TOKEN || !SHOPIFY_DOMAIN) {
-        console.warn("Shopify env vars missing; catalog fetch skipped.");
+        console.warn("Shopify env vars missing; skipping catalog build.");
         return;
     }
+
     console.log("⏳ Fetching full catalog…");
-    const out = [];
+    const lines = [];
     const PAGE = 250;
     let cursor = null;
 
     while (true) {
         const query = `
-      query($f:Int!,$a:String) {
-        products(first:$f, after:$a) {
+      query($first:Int!,$after:String) {
+        products(first:$first, after:$after) {
           edges {
             cursor
             node {
               title handle
-              variants(first:1) { edges { node { price { amount currencyCode } } } }
+              variants(first:1) {
+                edges { node { price { amount currencyCode } } }
+              }
             }
           }
           pageInfo { hasNextPage }
         }
       }`;
-        const variables = { f: PAGE, a: cursor };
+        const vars = { first: PAGE, after: cursor };
 
-        const r = await fetch(`https://${SHOPIFY_DOMAIN}/api/2024-01/graphql.json`, {
+        const res = await fetch(`https://${SHOPIFY_DOMAIN}/api/2024-01/graphql.json`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 "X-Shopify-Storefront-Access-Token": SHOPIFY_TOKEN
             },
-            body: JSON.stringify({ query, variables })
+            body: JSON.stringify({ query, variables: vars })
         });
-        const j = await r.json();
-        const edges = j.data.products.edges;
+        const json = await res.json();
+        const edges = json.data.products.edges;
 
         edges.forEach(({ node }) => {
             const v0 = node.variants.edges[0]?.node;
             const price = v0 ? `${v0.price.amount} ${v0.price.currencyCode}` : "—";
-            const url = `https://www.restosupplyhub.com/products/${node.handle}`;
-            out.push(`• ${node.title} | $${price} | ${url}`);
+            const url = `https://${SHOPIFY_DOMAIN}/products/${node.handle}`;
+            lines.push(
+                `<li><a href="${url}" target="_blank" rel="noopener">${node.title}</a> — $${price}</li>`
+            );
         });
 
-        if (!j.data.products.pageInfo.hasNextPage) break;
+        if (!json.data.products.pageInfo.hasNextPage) break;
         cursor = edges.at(-1).cursor;
     }
 
-    catalogLines = out;
-    console.log(`✅ Catalog loaded (${catalogLines.length} items).`);
+    catalogHtml = `<ol>\n${lines.join("\n")}\n</ol>`;
+    console.log(`✅ Built HTML catalog with ${lines.length} items.`);
 }
 
-/* ── Helper: store-info snippet ───────────────────────────────── */
-const storeInfoSnippet = () => `
-Office hours: ${storeInfo.office_hours || "—"}
-Contact: ${storeInfo.phone || ""} • ${storeInfo.email || ""}
-Current offer: ${storeInfo.promo || "—"}
-Returns: ${storeInfo.returns || "—"}
-Shipping: ${storeInfo.shipping || "—"}
-Tracking: ${storeInfo.tracking || "—"}
+/* ─── Build store-info snippet ───────────────────────────────── */
+const storeInfoHtml = () => `
+<p><strong>Office hours:</strong> ${storeInfo.office_hours || "—"}</p>
+<p><strong>Contact:</strong> ${storeInfo.phone || ""} • ${storeInfo.email || ""}</p>
+<p><strong>Promo:</strong> ${storeInfo.promo || "—"}</p>
+<p><strong>Returns:</strong> ${storeInfo.returns || "—"}</p>
+<p><strong>Shipping:</strong> ${storeInfo.shipping || "—"}</p>
+<p><strong>Tracking:</strong> ${storeInfo.tracking || "—"}</p>
 `.trim();
 
-/* ── Bootstrap ───────────────────────────────────────────────── */
+/* ─── Initialize caches ───────────────────────────────────────── */
 loadStoreInfo();
-fetchCatalog().catch(console.error);
-setInterval(fetchCatalog, 6 * 60 * 60 * 1000); // every 6 h
+buildCatalogHtml().catch(console.error);
+setInterval(buildCatalogHtml, 6 * 60 * 60 * 1000);  // refresh every 6h
 
-/* ── Express setup ───────────────────────────────────────────── */
+/* ─── Express setup ─────────────────────────────────────────── */
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ── Chat endpoint with model fallback list ───────────────────── */
+/* ─── /chat endpoint (DeepSeek only) ─────────────────────────── */
 app.post("/chat", async (req, res) => {
     try {
         const history = req.body.messages;
-        if (!Array.isArray(history) || !history.length)
+        if (!Array.isArray(history) || !history.length) {
             return res.status(400).json({ error: "messages array required" });
-        if (!OPENROUTER_API_KEY)
+        }
+        if (!OPENROUTER_API_KEY) {
             return res.status(500).json({ error: "Missing OpenRouter API key" });
+        }
 
         /* Build system prompt */
         const system = {
             role: "system",
             content: `
-You are a friendly AI assistant for Resto Supply Hub. Your name is RSH assistant.
+You are the RSH AI assistant for Resto Supply Hub.
 
-We currently have ${catalogLines.length} products.
+We have ${catalogHtml
+                    .match(/<li/g)?.length || 0} products in our catalog.
 
 ===== Store Info =====
-${storeInfoSnippet()}
+${storeInfoHtml()}
+
+===== Catalog HTML =====
+Here is our complete catalog as HTML. When asked for products, use this list exactly:
+${catalogHtml}
 
 ===== Instructions =====
-• If greeted (“hi”, “hello”), reply with a friendly <p>Hello …</p>.
-• If user asks “Office Hours”, respond with: <p>Our office hours are ${storeInfo.office_hours}.</p>
-• For product queries, turn catalog bullets into an HTML <ol><li>…</li></ol>.
-• Answer other questions in HTML <p>…</p> paragraphs.
-• Always output valid HTML; never raw Markdown.
-
+• If the user greets you (“hi”, “hello”), reply with a friendly <p>…</p>.  
+• If asked “Office Hours”, reply with <p>Our office hours are ${storeInfo.office_hours}.</p>.  
+• For product requests, respond by referencing or transforming the above <ol>…</ol> HTML.  
+• For other queries, answer in <p>…</p> paragraphs.  
+• Always return valid HTML and do NOT wrap it in markdown fences.
 `.trim()
         };
 
-        /* Catalog slice (first 200 lines ≈ 2-3k tokens) */
-        const catalogMsg = {
-            role: "assistant",
-            name: "catalog",
-            content: catalogLines.slice(0, 200).join("\n")
-        };
+        /* Call DeepSeek only */
+        const rr = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                model: "deepseek/deepseek-prover-v2",
+                messages: [system, ...history]
+            })
+        });
+        const jr = await rr.json();
 
-        /* Model fallback list */
-        const MODELS = [
-            "deepseek/deepseek-prover-v2:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "nousresearch/deephermes-3-mistral-24b-preview:free",
-            "opengvlab/internvl3-14b:free",
-
-        ];
-
-        let replyHtml = null;
-        let lastError = null;
-
-        for (const model of MODELS) {
-            const openrouterResp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                method: "POST",
-                headers: {
-                    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    model,
-                    messages: [system, catalogMsg, ...history]
-                })
-            }).then(r => r.json());
-
-            if (openrouterResp.error) {
-                lastError = openrouterResp.error;
-                const msg = openrouterResp.error.message || "";
-                const quotaHit = msg.includes("free-models-per-day") || openrouterResp.error.code === "insufficient_quota";
-                if (quotaHit) {
-                    console.warn(`Model ${model} quota exhausted → trying next.`);
-                    continue; // try next model
-                }
-                console.error(`Model ${model} returned error:`, openrouterResp.error);
-                break;      // break on non-quota error
-            }
-
-            const candidate = openrouterResp.choices?.[0]?.message?.content;
-            if (candidate) {
-                replyHtml = candidate;
-                break;      // success
-            }
+        /* Surface errors */
+        if (jr.error) {
+            console.error("OpenRouter error:", jr.error);
+            return res.json({ reply: `<p>AI error: ${jr.error.message}</p>` });
         }
 
-        if (!replyHtml) {
-            console.error("All fallback models failed:", lastError);
-            replyHtml = `<p>AI error: ${lastError?.message || "Unknown error"}</p>`;
-        }
+        /* Extract reply */
+        const reply = jr.choices?.[0]?.message?.content
+            || "<p>Sorry, no answer right now.</p>";
 
-        res.json({ reply: replyHtml });
-
-    } catch (err) {
-        console.error("🔥 /chat error:", err);
+        res.json({ reply });
+    } catch (e) {
+        console.error("🔥 /chat error:", e);
         res.status(500).json({ error: "Server error" });
     }
 });
 
-/* ── Start HTTP server ───────────────────────────────────────── */
-app.listen(PORT, () => console.log(`🚀 Chatbot API listening on :${PORT}`));
+/* ─── Launch ──────────────────────────────────────────────────── */
+app.listen(PORT, () => {
+    console.log(`🚀 Chatbot API listening on ${PORT}`);
+});
