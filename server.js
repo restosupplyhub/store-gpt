@@ -69,8 +69,8 @@ async function fetchCatalog() {
         edges.forEach(({ node }) => {
             const v0 = node.variants.edges[0]?.node;
             const price = v0 ? `${v0.price.amount} ${v0.price.currencyCode}` : "—";
-            const url = `https://${SHOPIFY_DOMAIN}/products/${node.handle}`;
-            out.push(`• ${node.title} – $${price} – [View item →](${url})`);
+            const url = `https://www.restosupplyhub.com/products/${node.handle}`;
+            out.push(`• ${node.title} | $${price} | ${url}`);
         });
 
         if (!j.data.products.pageInfo.hasNextPage) break;
@@ -114,9 +114,9 @@ app.post("/chat", async (req, res) => {
         const system = {
             role: "system",
             content: `
-You are a friendly AI assistant for Resto Supply Hub.
+You are a friendly AI assistant for Resto Supply Hub. Your name is RSH assistant.
 
-We currently stock ${catalogLines.length} packaging products.
+We currently have ${catalogLines.length} products.
 
 ===== Store Info =====
 ${storeInfoSnippet()}
